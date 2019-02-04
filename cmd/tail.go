@@ -15,15 +15,15 @@
 package cmd
 
 import (
-	"fmt"
-
-	"github.com/danmikita/furl/pkg/furl/apply"
+	"github.com/danmikita/furl/pkg/furl"
 	"github.com/spf13/cobra"
 )
 
+var Follow bool
+
 // deployCmd represents the deploy command
 var deployCmd = &cobra.Command{
-	Use:   "deploy",
+	Use:   "tail",
 	Short: "A brief description of your command",
 	Long: `A longer description that spans multiple lines and likely contains examples
 and usage of using your command. For example:
@@ -32,8 +32,8 @@ Cobra is a CLI library for Go that empowers applications.
 This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("deploy called")
-		apply.Message()
+		pod, container := furl.GetPod(true)
+		furl.Logs(pod.Name, container.Name, Follow)
 	},
 }
 
@@ -44,7 +44,7 @@ func init() {
 
 	// Cobra supports Persistent Flags which will work for this command
 	// and all subcommands, e.g.:
-	// deployCmd.PersistentFlags().String("foo", "", "A help for foo")
+	deployCmd.PersistentFlags().BoolVarP(&Follow,"follow", "f", false, "Follow the selected log")
 
 	// Cobra supports local flags which will only run when this command
 	// is called directly, e.g.:

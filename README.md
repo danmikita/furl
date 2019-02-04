@@ -1,2 +1,2 @@
 # furl
-A Helm template development tool with support for both Kubernetes and Openshift
+A Kubernetes tool with support for both Kubernetes and Openshift
