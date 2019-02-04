@@ -6,16 +6,16 @@ import (
 	"os"
 )
 
-func Logs(pod string, container string, follow bool) {
+func Logs(selection Selection, follow bool) {
 
-	namespace := client.NamespaceInConfig()
+	namespace := client.GetNamespace()
 
 	logOptions := v1.PodLogOptions{
-		Container: container,
+		Container: selection.container.Name,
 		Follow:    follow,
 	}
 
-	log := client.clientset.CoreV1().Pods(namespace).GetLogs(pod, &logOptions)
+	log := client.clientset.CoreV1().Pods(namespace).GetLogs(selection.pod.Name, &logOptions)
 
 	readCloser, err := log.Stream()
 	if err != nil {

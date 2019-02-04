@@ -44,8 +44,7 @@ func (c *Client) GetClient() (*Client, error) {
 	return c, nil
 }
 
-// NamespaceInConfig returns namespace set in kubeconfig
-func (c *Client) NamespaceInConfig() string {
+func (c *Client) GetNamespace() string {
 	if c.clientConfig == nil {
 		return ""
 	}

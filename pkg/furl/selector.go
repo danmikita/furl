@@ -1,10 +1,7 @@
 package furl
 
 import (
-	//"fmt"
-	//"gopkg.in/AlecAivazis/survey.v1"
-	//"io"
-	//"k8s.io/api/core/v1"
+	v12 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"gopkg.in/AlecAivazis/survey.v1"
@@ -12,16 +9,17 @@ import (
 )
 
 type Selection struct {
+	deployment v12.Deployment
 	pod       v1.Pod
 	container v1.ContainerStatus
 }
 
 var client = Client{}
 
-func GetPod(fetchcontainer bool) (v1.Pod, v1.ContainerStatus) {
+func GetPod(fetchcontainer bool) Selection {
 
 	client.GetClient()
-	namespace := client.NamespaceInConfig()
+	namespace := client.GetNamespace()
 
 	pods, err := client.clientset.CoreV1().Pods(namespace).List(metav1.ListOptions{})
 	if err != nil {
@@ -50,7 +48,12 @@ func GetPod(fetchcontainer bool) (v1.Pod, v1.ContainerStatus) {
 		container = getContainer(podmap[choice])
 	}
 
-	return podmap[choice], container
+	selection := Selection{
+		pod:       podmap[choice],
+		container: container,
+	}
+
+	return selection
 }
 
 func getContainer(pod v1.Pod) v1.ContainerStatus {
