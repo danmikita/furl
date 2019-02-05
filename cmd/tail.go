@@ -21,8 +21,7 @@ import (
 
 var Follow bool
 
-// deployCmd represents the deploy command
-var deployCmd = &cobra.Command{
+var tailCmd = &cobra.Command{
 	Use:   "tail",
 	Short: "A brief description of your command",
 	Long: `A longer description that spans multiple lines and likely contains examples
@@ -38,15 +37,15 @@ to quickly create a Cobra application.`,
 }
 
 func init() {
-	rootCmd.AddCommand(deployCmd)
+	rootCmd.AddCommand(tailCmd)
 
 	// Here you will define your flags and configuration settings.
 
 	// Cobra supports Persistent Flags which will work for this command
 	// and all subcommands, e.g.:
-	deployCmd.PersistentFlags().BoolVarP(&Follow, "follow", "f", false, "Follow the selected log")
+	tailCmd.PersistentFlags().BoolVarP(&Follow, "follow", "f", false, "Follow the selected log")
 
 	// Cobra supports local flags which will only run when this command
 	// is called directly, e.g.:
-	// deployCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	// tailCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 }

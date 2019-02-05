@@ -1,7 +1,6 @@
 package furl
 
 import (
-	v12 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"gopkg.in/AlecAivazis/survey.v1"
@@ -9,9 +8,8 @@ import (
 )
 
 type Selection struct {
-	deployment v12.Deployment
-	pod       v1.Pod
-	container v1.ContainerStatus
+	Pod        v1.Pod
+	Container  v1.ContainerStatus
 }
 
 var client = Client{}
@@ -38,7 +36,7 @@ func GetPod(fetchcontainer bool) Selection {
 
 	choice := ""
 	prompt := &survey.Select{
-		Message: "Choose a pod:",
+		Message: "Choose a Pod:",
 		Options: podlist,
 	}
 	survey.AskOne(prompt, &choice, nil)
@@ -49,8 +47,8 @@ func GetPod(fetchcontainer bool) Selection {
 	}
 
 	selection := Selection{
-		pod:       podmap[choice],
-		container: container,
+		Pod:       podmap[choice],
+		Container: container,
 	}
 
 	return selection
@@ -72,7 +70,7 @@ func getContainer(pod v1.Pod) v1.ContainerStatus {
 
 	choice := ""
 	prompt := &survey.Select{
-		Message: "Choose a container:",
+		Message: "Choose a Container:",
 		Options: containerlist,
 	}
 	survey.AskOne(prompt, &choice, nil)
