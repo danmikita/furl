@@ -1,0 +1,468 @@
+#!/bin/sh
+
+help_menu () {
+    echo " ____  _  _  ____  __   "
+    echo "(  __)/ )( \(  _ \(  )  "
+    echo " ) _) ) \/ ( )   // (_/\\"
+    echo "(__)  \____/(__\_)\____/"
+    echo "To roll or gather a sail against its mast or spar."
+    echo "by Dan Mikita"
+    echo ""
+    echo " "
+    echo "Initialization Commands: "
+    echo "       furl install                           Install docker, helm and minishift. If already installed, they will be ignored."
+    echo "       furl start                             Start minishift with all required tools and configurations."
+    echo " "
+    echo "Development Commands: "
+    echo "       furl env                               Sets your docker daemon to point to Minishfit."
+    echo "       furl deploy [optional chart dir]       Deploys your application to Minishift using your chart."
+    echo "       furl delete [optional chart dir]       Deletes your application from Minishift using your chart."
+    echo "       furl sync [namespace]                  Pull down the secrets from the specified non-prod namespace to your local minishift."
+    echo "       furl template                         Fetch the latest templates for your project."
+    echo " "
+    echo "Troubleshooting Commands: "
+    echo "       furl tail [optional search query]      Tail the selected pod/container logs."
+    echo "       furl find [optional search query]      Find the selected pod/container to view it's status."
+    echo "       furl connect [optional port number]    Connect to the selected pod/container over a specified port (8080 by default)."
+    echo "       furl describe [optional search query]  Describe the selected pod/container in YAML."
+    echo "       furl ssh                               Connect to the selected pod/container with a BASH prompt."
+    echo "       furl secret                            List and decode all secrets"
+    echo "       furl config                            List all config values"
+    echo " "
+    echo "Other Commands: "
+    echo "       furl status                            View you current context (namespace/cluster/user)."
+    echo "       furl amq [start/stop]                  Starts and stop a local instance of AMQ."
+    echo "       furl fetch [chart name] [version]      Fetches and deploys the chart from the helm artifactory repo. "
+    echo "       furl help"
+}
+
+scrub_file () {
+        sed -i '' 's/{.*}}//g' $1
+        sed -i '' 's/namespace: .*//g' $1
+        sed -i '' 's/kubectl.*//g' $1
+}
+
+check_and_start_minishift() {
+  minishiftRunning=$(ps -ef | grep minishift | grep VBoxHeadless)
+
+  if [[ -z $minishiftRunning ]]; then
+    tput bold; echo "Minishift doesn't seem to be running - starting it now..."; tput sgr0
+    minishift start
+    tput bold; echo "done"
+
+    echo "\n\n************************"
+    echo "Since minishift wasn't running - you need to make sure your docker environment is set up properly..."
+    echo "************************\n\n"; tput sgr0
+    subcommand="env"
+  fi
+}
+
+check_for_fzf() {
+    if brew ls --versions fzf > /dev/null; then
+  # The package is installed
+        return 0
+    else
+  # The package is not installed
+        echo "Do you wish to install the fzf and kube-fzf requirements to run this command?"
+        select yn in "Yes" "No"; do
+        case $yn in
+            Yes ) brew install fzf; brew install jq; brew tap arunvelsriram/stable; brew install kube-fzf; break;;
+            No ) exit;;
+        esac
+        done
+    fi
+}
+
+get_pod_and_container() {
+    pod_name=$(kubectl get po | $inline_fzf | awk '{print $1}')
+    pods_out=$(echo "$pod_name" | xargs kubectl get po -o=jsonpath='{.spec.containers[*].name} {.spec.initContainers[*].name}' | sed 's/ $//')
+    container_name=$(echo "$pods_out" |  tr ' ' "\n" | $inline_fzf_nh)
+}
+
+get_secrets() {
+    pod_name=$(kubectl get secret | $inline_fzf | awk '{print $1}')
+    kubectl get secret ${pod_name} -o=json | jq '.data' | jq 'map_values(@base64d)'
+}
+
+get_configs() {
+    pod_name=$(kubectl get configmap | $inline_fzf | awk '{print $1}')
+    kubectl get configmap ${pod_name} -o=json | jq '.data'
+}
+
+fetch_ews_templates() {
+    if [ ! -d "$furlHomeDirectory/ews-templates" ]
+    then
+        git clone ssh://git@bitbucketemplates.git $furlHomeDirectory/ews-templates
+    fi
+
+    if [ -d "$furlHomeDirectory/ews-templates" ]
+    then
+        git -C "$furlHomeDirectory/ews-templates" pull origin master
+        cp -R "$furlHomeDirectory/ews-templates/templates/" "$chart/templates"
+    fi
+
+}
+
+subcommand=$1; shift  # Remove 'pip' from the argument list
+
+settingsXML="$HOME/.m2/settings.xml"
+publishUrl="http://artifactory/helm"
+artifactoryUrl="https://artifactory/helm"
+minishiftPort="8443"
+nonProdUrl="https://openshift-nonprod"
+furlHomeDirectory="$HOME/.furl"
+chartDirectory="$furlHomeDirectory/charts"
+cert="$furlHomeDirectory/artifactory.cert"
+chartDependenciesEnabled="--set dependencies.enabled=true"
+inline_fzf="fzf --multi --ansi -i -1 --height=50% --reverse -0 --header-lines=1 --inline-info --border"
+inline_fzf_nh="fzf --multi --ansi -i -1 --height=50% --reverse -0 --inline-info --border"
+
+if [ ! -d "$furlHomeDirectory" ]
+then
+    mkdir $furlHomeDirectory
+fi
+
+if [ ! -f $settingsXML ]; then
+    echo "Maven settings.xml not found!"
+    exit 1
+fi
+
+username=$(egrep -e "<username>.{5,10}</username>" $settingsXML  | sed -e 's/[ ]*<username>\(.*\)<\/username>[ ]*/\1/' | grep -v jbossdev -m 1)
+password=$(egrep -e "<password>.{12,60}</password>" $settingsXML  | sed -e 's/[ ]*<password>\(.*\)<\/password>[ ]*/\1/')
+
+#echo "username: $username"
+#echo "password: $password"
+
+case "$subcommand" in
+  # Parse options to the install sub command
+  install )
+    #--------------------------------
+    # Docker set-up
+    #--------------------------------
+    if !(brew cask list | grep -q "docker"); then
+        brew cask install docker
+    fi
+
+    #--------------------------------
+    # Helm set-up
+    #--------------------------------
+    if !(brew list | grep -q "kubernetes-helm"); then
+        brew install kubernetes-helm
+        curl https://storage.googleapis.com/kubernetes-helm/helm-v2.10.0-rc.1-darwin-amd64.tar.gz | tar -xvz -C $furlHomeDirectory
+        mv $furlHomeDirectory/darwin-amd64/helm /usr/local/bin/
+    fi
+
+    if !(helm repo list | grep -q $artifactoryUrl); then
+        echo -n | openssl s_client -showcerts -connect repo.org:443 | sed -ne '/-BEGIN CERTIFICATE-/,/-END CERTIFICATE-/p' > $cert
+        helm repo add helm $artifactoryUrl --username $username --password $password --ca-file $cert
+        helm repo update
+    fi
+
+    #--------------------------------
+    # Minishift set-up
+    #--------------------------------
+    if !(brew list | grep -q "openshift-cli"); then
+        brew install openshift-cli
+    fi
+
+    if !(brew list | grep -q "kubernetes-cli"); then
+        brew install kubernetes-cli
+    fi
+
+    if !(brew cask list | grep -q "minishift"); then
+        brew cask install minishift
+    fi
+    ;;
+
+  publish )
+    file=$1; shift
+
+    if [ -z "$file" ]
+    then
+      echo "File name must be included. (You must be in the same directory as the file for this command)"
+    else
+      curl -u$username:$password -T $file  "$publishUrl/$file"
+    fi
+
+    ;;
+
+  sync )
+    namespace=$1
+
+    if [ -z "$namespace" ]
+    then
+        echo "A namespace you wish to copy secrets from must be included"
+    else
+        secretsFile=$furlHomeDirectory/$namespace-secrets.yml
+        oc login $nonProdUrl -u=$USER
+        oc project $namespace
+        oc get secret ews-secrets -o yaml > $secretsFile
+        scrub_file $secretsFile
+
+        ip=$(minishift ip)
+        oc login $ip:$minishiftPort -u admin -p admin
+        oc project myproject
+        oc delete secret ews-secrets
+        oc apply -f $secretsFile
+    fi
+
+    ;;
+
+  start )
+    if [ ! -d "$furlHomeDirectory/minishift-addons" ]
+    then
+        git clone https://github.com/minishift/minishift-addons.git $furlHomeDirectory/minishift-addons
+    fi
+
+    if [ -d "$furlHomeDirectory/minishift-addons" ]
+    then
+        git -C "$furlHomeDirectory/minishift-addons" pull origin master
+
+        minishift addons install --defaults
+        minishift addons enable admin-user
+        minishift addons enable anyuid
+        minishift config set insecure-registry repotest.org:6555,repo.org:6555,repo.org:6554,registry.access.redhat.com
+        minishift config set vm-driver virtualbox
+        minishift config set memory 8192mb
+        minishift config set disk-size 40gb
+        minishift config set cpus 4
+        minishift start
+        minishift addons install "$furlHomeDirectory/minishift-addons/add-ons/helm"
+        minishift addons apply helm
+        oc login -u admin -p admin
+        helm init --upgrade
+    fi
+
+    ;;
+
+  deploy )
+    check_and_start_minishift
+
+    chart=$1
+
+    if [ -z "$chart" ]
+    then
+      chart="$(ls -d charts/* | head -n 1)"
+      echo "Using $chart"
+    fi
+
+    if [ -z "$chart" ]
+    then
+      echo "Chart directory must be included."
+    else
+      helm repo update
+      helm dependency update $chart
+      fetch_ews_templates
+
+      if [ -f "$chart/overrides.yaml" ]
+      then
+        helm template -n blah --values=$chart/overrides.yaml $chart $chartDependenciesEnabled | oc apply -f -
+      else
+        helm template -n blah $chart $chartDependenciesEnabled | oc apply -f -
+      fi
+    fi
+
+    ;;
+
+  delete )
+    check_and_start_minishift
+
+    chart=$1
+
+    if [ -z "$chart" ]
+    then
+      chart="$(ls -d charts/* | head -n 1)"
+    fi
+
+    if [ -z "$chart" ]
+    then
+      echo "Chart directory must be included."
+    else
+      helm template -n blah $chart $chartDependenciesEnabled | oc delete -f -
+    fi
+
+    ;;
+
+  debug )
+    check_and_start_minishift
+
+    chart=$1
+
+    if [ -z "$chart" ]
+    then
+      chart="$(ls -d charts/* | head -n 1)"
+    fi
+
+    if [ -z "$chart" ]
+    then
+      echo "Chart directory must be included."
+    else
+      helm template -n blah $chart --set debug=true | oc apply -f -
+
+      while [ $(oc get pods | egrep -e "^$name-*" | sed 's/ .*$//' | wc -l) -gt 1 ]
+      do
+        sleep 5
+        echo "Waiting for pod..."
+      done
+
+      pod=$(oc get pods | egrep -e "^$name-*" | sed 's/ .*$//')
+      echo "Pod name: $pod"
+      oc port-forward $pod 5005
+    fi
+
+    ;;
+
+  fetch )
+    check_and_start_minishift
+
+    chart=$1
+    version=$2
+
+    if [ -z "$chart" ]
+    then
+      echo "Chart name must be included. This assumes the 'helm' repo from 'helm repo list'"
+    else
+      helm fetch "helm/$chart" --version=$version --untar=true --untardir=$chartDirectory
+      helm template -n $chart "$chartDirectory/$chart" $chartDependenciesEnabled  | oc apply -f -
+    fi
+
+    ;;
+
+  template )
+    chart=$1
+
+    if [ -z "$chart" ]
+    then
+      chart="$(ls -d charts/* | head -n 1)"
+      echo "Using $chart"
+    fi
+
+    if [ -z "$chart" ]
+    then
+      echo "Chart directory must be included."
+      exit 1
+    fi
+
+    fetch_ews_templates
+    ;;
+
+  env )
+    check_and_start_minishift
+
+    command='eval $(minishift docker-env)'
+    echo $command | pbcopy
+    tput bold; echo "'$command' has been copied to your clipboard. Please paste and execute."; tput sgr0;
+    ;;
+
+  amq ) 
+
+    if [[ "$1" = "start" ]]; then
+        if docker ps | grep -q local_amq; then
+          echo "Local AMQ is already running..."
+        else
+          echo "Checking if local AMQ has been installed..."
+          if docker ps -a | grep -q local_amq; then
+              echo "Local AMQ already installed..."
+              echo "Starting local AMQ..."
+              echo "."
+              echo "."
+              echo "."
+              docker start local_amq
+              echo "Local AMQ has started and can be found at http://localhost:8161/admin"
+              echo "Username: admin"
+              echo "Password: admin"
+          else
+              echo "Local AMQ can not be found. Installing now..."
+              echo "."
+              echo "."
+              echo "."
+              docker run -d --name local_amq  -p 61616:61616 -p 8161:8161 rmohr/activemq
+              echo "Local AMQ has started and can be found at http://localhost:8161/admin"
+              echo "Username: admin"
+              echo "Password: admin"
+          fi
+        fi
+    fi
+
+    if [[ "$1" = "stop" ]]; then
+        echo "Checking if local AMQ is currently running..."
+        if docker ps | grep -q local_amq; then
+            echo "Stopping local AMQ..."
+            docker stop local_amq
+        else
+            echo "."
+            echo "."
+            echo "."
+            echo "It's not."
+        fi
+    fi
+
+    ;;
+
+  tail )
+    check_for_fzf
+    line_count=10
+    if [[ $1 =~ ^[-]{0,1}[0-9]+$ ]]; then
+        line_count="$1"
+        shift
+    fi
+    follow=" "
+    if [[ $1 = "-f" ]]; then
+        follow=-f
+        shift
+    fi
+
+    get_pod_and_container
+    kubectl logs ${pod_name} -c ${container_name} --tail=$line_count $follow | while read -r line; do echo "$line" | jq -R -r '. as $line | try fromjson catch $line'; done
+    ;;
+
+  describe )
+      check_for_fzf
+      describepod $1
+      ;;
+
+  ssh )
+      check_for_fzf
+      execpod
+      ;;
+
+  find )
+      check_for_fzf
+      findpod $1
+      ;;
+
+  status )
+      kubectl config current-context
+      ;;
+
+  connect )
+    check_for_fzf
+    if [ -z "$1" ]
+      then
+        pfpod 8080
+      else
+        pfpod $1
+    fi
+    ;;
+
+  secret )
+    check_for_fzf
+    get_secrets
+    ;;
+
+  config )
+    check_for_fzf
+    get_configs
+    ;;
+
+  help )
+    help_menu
+    exit 1
+    ;;
+
+  * )
+    help_menu
+    exit 1
+    ;;
+
+esac
